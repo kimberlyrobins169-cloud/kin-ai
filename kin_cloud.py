@@ -1,9 +1,23 @@
 from flask import Flask, request, jsonify
 import requests
+import json
+import os
 
 app = Flask(__name__)
 
 OPENROUTER_API_KEY = "PASTE_YOUR_KEY_HERE"
+
+MEMORY_FILE = "memory.json"
+
+def load_memory():
+    if os.path.exists(MEMORY_FILE):
+        with open(MEMORY_FILE,"r") as f:
+            return json.load(f)
+    return []
+
+def save_memory(mem):
+    with open(MEMORY_FILE,"w") as f:
+        json.dump(mem,f)
 
 HTML_PAGE = """
 <!DOCTYPE html>
@@ -13,128 +27,99 @@ HTML_PAGE = """
 <title>K.I.N</title>
 
 <style>
-:root {
-  --blue: #3b82f6;
-  --yellow: #facc15;
-  --glass: rgba(255,255,255,0.15);
+body{
+margin:0;
+font-family:Segoe UI;
+background:linear-gradient(135deg,#2563eb,#fde047);
+height:100vh;
+display:flex;
+justify-content:center;
+align-items:center;
 }
 
-body {
-  margin:0;
-  font-family:Segoe UI, sans-serif;
-  background: linear-gradient(135deg, var(--blue), var(--yellow));
-  height:100vh;
-  display:flex;
-  justify-content:center;
-  align-items:center;
+#app{
+width:390px;
+height:80vh;
+background:rgba(255,255,255,0.15);
+backdrop-filter:blur(20px);
+border-radius:25px;
+display:flex;
+flex-direction:column;
+padding:15px;
 }
 
-#container {
-  width:95%;
-  max-width:900px;
-  height:90vh;
-  background:var(--glass);
-  backdrop-filter: blur(15px);
-  border-radius:20px;
-  padding:20px;
-  display:flex;
-  flex-direction:column;
-}
+#chat{flex:1;overflow:auto;color:white;}
 
-h1 { color:white; text-align:center; }
+.msg{margin-bottom:10px;}
 
-#chat { flex:1; overflow-y:auto; color:white; }
+img{max-width:180px;border-radius:12px;margin-top:5px;}
 
-.message { margin-bottom:12px; }
+#controls{display:flex;gap:5px;}
 
-img.chat-img {
-  max-width:220px;
-  border-radius:10px;
-  margin-top:6px;
-  display:block;
-}
+input[type=text]{flex:1;padding:10px;border-radius:10px;border:none;}
 
-#input-area { display:flex; gap:8px; }
-
-input[type=text] {
-  flex:1;
-  padding:12px;
-  border-radius:12px;
-  border:none;
-}
-
-button {
-  padding:12px;
-  border-radius:12px;
-  border:none;
-  background:#2563eb;
-  color:white;
-}
+button{padding:10px;border:none;border-radius:10px;background:#1d4ed8;color:white;}
 </style>
 </head>
 
 <body>
-<div id="container">
-<h1>K.I.N</h1>
+<div id="app">
 <div id="chat"></div>
 
-<div id="input-area">
-<input id="textInput" placeholder="Talk to K.I.N">
-<input type="file" id="imageInput" accept="image/*">
-<button onclick="sendMessage()">Send</button>
+<div id="controls">
+<input id="msg">
+<input type="file" id="img">
+<button onclick="send()">Send</button>
 </div>
 </div>
 
 <script>
-const chat = document.getElementById("chat");
+const chat=document.getElementById("chat");
 
-function addMessage(sender,text,image=null){
- let div=document.createElement("div");
- div.className="message";
- div.innerHTML="<b>"+sender+":</b> "+text;
-
- if(image){
-   let img=document.createElement("img");
-   img.src=image;
-   img.className="chat-img";
-   div.appendChild(img);
- }
-
- chat.appendChild(div);
- chat.scrollTop=chat.scrollHeight;
+function add(sender,text,image){
+let div=document.createElement("div");
+div.className="msg";
+div.innerHTML="<b>"+sender+":</b> "+text;
+if(image){
+let im=document.createElement("img");
+im.src=image;
+div.appendChild(im);
+}
+chat.appendChild(div);
+chat.scrollTop=chat.scrollHeight;
 }
 
-async function sendMessage(){
- let text=document.getElementById("textInput").value;
- let imgInput=document.getElementById("imageInput");
+async function send(){
+let msg=document.getElementById("msg").value;
+let file=document.getElementById("img").files[0];
 
- addMessage("You",text);
+let imgData=null;
 
- let base64=null;
-
- if(imgInput.files.length>0){
-   let reader=new FileReader();
-   reader.onload=async ()=>{
-     base64=reader.result;
-     await sendToServer(text,base64);
-   }
-   reader.readAsDataURL(imgInput.files[0]);
- } else {
-   await sendToServer(text,null);
- }
-
- document.getElementById("textInput").value="";
- imgInput.value="";
+if(file){
+let reader=new FileReader();
+reader.onload=()=>{imgData=reader.result; sendNow(msg,imgData);}
+reader.readAsDataURL(file);
+}else{
+sendNow(msg,null);
 }
 
-async function sendToServer(message,image){
- let res=await fetch("/ask",{
-   method:"POST",
-   headers:{"Content-Type":"application/json"},
-   body:JSON.stringify({message,image})
- });
- let data=await res.json();
- addMessage("K.I.N",data.response);
+add("You",msg,imgData);
+document.getElementById("msg").value="";
+document.getElementById("img").value="";
+}
+
+async function sendNow(msg,img){
+let res=await fetch("/ask",{method:"POST",headers:{"Content-Type":"application/json"},
+body:JSON.stringify({message:msg,image:img})});
+let data=await res.json();
+add("KIN",data.response);
+speak(data.response);
+}
+
+function speak(text){
+let speech=new SpeechSynthesisUtterance(text);
+speech.lang="en-US";
+speechSynthesis.speak(speech);
 }
 </script>
 </body>
@@ -145,28 +130,44 @@ async function sendToServer(message,image){
 def home():
     return HTML_PAGE
 
-@app.route("/ask", methods=["POST"])
+@app.route("/ask",methods=["POST"])
 def ask():
-    data = request.json
-    user_message = data.get("message", "")
+    data=request.json
+    message=data.get("message","")
+    image=data.get("image")
 
-    response = requests.post(
+    memory=load_memory()
+
+    content=[{"type":"text","text":message}]
+
+    if image:
+        content.append({
+            "type":"image_url",
+            "image_url":{"url":image}
+        })
+
+    memory.append({"role":"user","content":content})
+
+    response=requests.post(
         "https://openrouter.ai/api/v1/chat/completions",
         headers={
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type": "application/json"
+            "Authorization":f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type":"application/json"
         },
         json={
-            "model": "mistralai/mistral-7b-instruct",
-            "messages": [
-                {"role": "system", "content": "You are K.I.N, a friendly AI companion."},
-                {"role": "user", "content": user_message}
-            ]
+            "model":"openai/gpt-4o-mini",
+            "messages":[
+                {"role":"system","content":"You are K.I.N, a loyal intelligent AI companion."}
+            ]+memory[-10:]
         }
     )
 
-    reply = response.json()["choices"][0]["message"]["content"]
-    return jsonify({"response": reply})
+    reply=response.json()["choices"][0]["message"]["content"]
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    memory.append({"role":"assistant","content":reply})
+    save_memory(memory)
+
+    return jsonify({"response":reply})
+
+if __name__=="__main__":
+    app.run(host="0.0.0.0",port=10000)

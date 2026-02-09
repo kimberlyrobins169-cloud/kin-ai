@@ -1,73 +1,172 @@
-import json
-import os
-from fastapi import FastAPI, Form
-from fastapi.responses import HTMLResponse
-from openai import OpenAI
+from flask import Flask, request, jsonify
+import requests
 
-app = FastAPI()
+app = Flask(__name__)
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+OPENROUTER_API_KEY = "PASTE_YOUR_KEY_HERE"
 
-MEMORY_FILE = "memory.json"
+HTML_PAGE = """
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>K.I.N</title>
 
-# Load memory
-def load_memory():
-    if not os.path.exists(MEMORY_FILE):
-        return {}
-    with open(MEMORY_FILE, "r") as f:
-        return json.load(f)
+<style>
+:root {
+  --blue: #3b82f6;
+  --yellow: #facc15;
+  --glass: rgba(255,255,255,0.15);
+}
 
-# Save memory
-def save_memory(mem):
-    with open(MEMORY_FILE, "w") as f:
-        json.dump(mem, f)
+body {
+  margin:0;
+  font-family:Segoe UI, sans-serif;
+  background: linear-gradient(135deg, var(--blue), var(--yellow));
+  height:100vh;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+}
 
-@app.get("/", response_class=HTMLResponse)
+#container {
+  width:95%;
+  max-width:900px;
+  height:90vh;
+  background:var(--glass);
+  backdrop-filter: blur(15px);
+  border-radius:20px;
+  padding:20px;
+  display:flex;
+  flex-direction:column;
+}
+
+h1 { color:white; text-align:center; }
+
+#chat { flex:1; overflow-y:auto; color:white; }
+
+.message { margin-bottom:12px; }
+
+img.chat-img {
+  max-width:220px;
+  border-radius:10px;
+  margin-top:6px;
+  display:block;
+}
+
+#input-area { display:flex; gap:8px; }
+
+input[type=text] {
+  flex:1;
+  padding:12px;
+  border-radius:12px;
+  border:none;
+}
+
+button {
+  padding:12px;
+  border-radius:12px;
+  border:none;
+  background:#2563eb;
+  color:white;
+}
+</style>
+</head>
+
+<body>
+<div id="container">
+<h1>K.I.N</h1>
+<div id="chat"></div>
+
+<div id="input-area">
+<input id="textInput" placeholder="Talk to K.I.N">
+<input type="file" id="imageInput" accept="image/*">
+<button onclick="sendMessage()">Send</button>
+</div>
+</div>
+
+<script>
+const chat = document.getElementById("chat");
+
+function addMessage(sender,text,image=null){
+ let div=document.createElement("div");
+ div.className="message";
+ div.innerHTML="<b>"+sender+":</b> "+text;
+
+ if(image){
+   let img=document.createElement("img");
+   img.src=image;
+   img.className="chat-img";
+   div.appendChild(img);
+ }
+
+ chat.appendChild(div);
+ chat.scrollTop=chat.scrollHeight;
+}
+
+async function sendMessage(){
+ let text=document.getElementById("textInput").value;
+ let imgInput=document.getElementById("imageInput");
+
+ addMessage("You",text);
+
+ let base64=null;
+
+ if(imgInput.files.length>0){
+   let reader=new FileReader();
+   reader.onload=async ()=>{
+     base64=reader.result;
+     await sendToServer(text,base64);
+   }
+   reader.readAsDataURL(imgInput.files[0]);
+ } else {
+   await sendToServer(text,null);
+ }
+
+ document.getElementById("textInput").value="";
+ imgInput.value="";
+}
+
+async function sendToServer(message,image){
+ let res=await fetch("/ask",{
+   method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({message,image})
+ });
+ let data=await res.json();
+ addMessage("K.I.N",data.response);
+}
+</script>
+</body>
+</html>
+"""
+
+@app.route("/")
 def home():
-    return """
-    <html>
-    <body style="font-family:sans-serif">
-        <h2>K.I.N AI</h2>
-        <form action="/chat" method="post">
-            <input name="message" style="width:300px"/>
-            <button type="submit">Send</button>
-        </form>
-    </body>
-    </html>
-    """
+    return HTML_PAGE
 
-@app.post("/chat", response_class=HTMLResponse)
-def chat(message: str = Form(...)):
+@app.route("/ask", methods=["POST"])
+def ask():
+    data = request.json
+    user_message = data.get("message", "")
 
-    memory = load_memory()
-    history = memory.get("history", [])
-
-    history.append({"role":"user","content":message})
-
-    system_personality = {
-        "role":"system",
-        "content":"You are K.I.N — charismatic, relaxed, witty, slightly sarcastic, casual tone. You can swear lightly but remain respectful and not offensive."
-    }
-
-    messages = [system_personality] + history
-
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=messages
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+            "Content-Type": "application/json"
+        },
+        json={
+            "model": "mistralai/mistral-7b-instruct",
+            "messages": [
+                {"role": "system", "content": "You are K.I.N, a friendly AI companion."},
+                {"role": "user", "content": user_message}
+            ]
+        }
     )
 
-    reply = response.choices[0].message.content
+    reply = response.json()["choices"][0]["message"]["content"]
+    return jsonify({"response": reply})
 
-    history.append({"role":"assistant","content":reply})
-    memory["history"] = history[-20:]  # remember last 20 messages
-    save_memory(memory)
-
-    return f"""
-    <html>
-    <body style="font-family:sans-serif">
-        <p><b>You:</b> {message}</p>
-        <p><b>K.I.N:</b> {reply}</p>
-        <a href="/">Back</a>
-    </body>
-    </html>
-    """
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
